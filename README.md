@@ -11,7 +11,7 @@ shader.load("../assets/shader/test.frag");
 GLuint id = shader.compile(GL_FRAGMENT_SHADER, true); // 开启调试显示
 </pre></code>
 
-生成的调试信息，就是解析 include 组合之后的代码
+-生成的调试信息，就是解析 include 组合之后的代码
    1:<br>
    2: #version 330 core
    3:
