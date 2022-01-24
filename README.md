@@ -26,7 +26,7 @@ GLuint id = shader.compile(GL_FRAGMENT_SHADER, true); // 开启调试显示
    218: // end ../assets/shader/test.frag<br></code>
  
 ### 错误日志
-'''
+```
    glsl> ERROR: Fragment Shader: "../assets/shader/test.frag"<br>
          0:11:  'aa' : syntax error syntax error<br>
-'''
+```
