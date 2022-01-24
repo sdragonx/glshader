@@ -1,8 +1,8 @@
 # glshader
-glsl include
+glsl include 的实现。
 
 ## 简介
-glsl include 的实现，使用 C++ 标准库（c++98），只实现了磁盘文件的支持，优点是，可以将错误代码正确定位到相关文件。
+glsl include 的实现，使用 C++ 标准库（c++98），只实现了磁盘文件的支持，此库优点是简短，并且可以将错误代码正确定位到相关文件。**只支持 #include 标记，对于 #define 没用解析**。
 
 ## 例子
 <pre><code>
