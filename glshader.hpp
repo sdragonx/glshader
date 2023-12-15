@@ -9,7 +9,14 @@
 #ifndef GLSHADER_HPP_20220124140616
 #define GLSHADER_HPP_20220124140616
 
+#if defined(__glew_h__) || defined(__GLEW_H__)
 #include <GL/glew.h>
+#elif defined(GLAD_GL_H_)
+#include <glad/gl4.6.h>
+#else
+#include <GL/GL.h>
+#endif
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -17,8 +24,8 @@
 #include <map>
 #include <vector>
 
-namespace cgl{
-namespace graphics{
+namespace cgl {
+namespace graphics {
 
 // 清除字符串前后空格
 inline std::string trim(const std::string& str, const std::string& spaces = " \t\r\n")
@@ -30,6 +37,19 @@ inline std::string trim(const std::string& str, const std::string& spaces = " \t
     }
     return str.substr(a, b - a);
 }
+
+/* 读取文件函数指针
+ *
+ * 如果 shader 在资源里面，或者 Android 的包里面，可以自定义一个加载函数
+ * int myLoadFile(std::stringstream& stm, const std::string& filename, void* arg)
+ * {
+ *     // load string to stream
+ *     std::string str = my_read_data(filename);
+ *     stm.str(str);
+ *     return 0; // success
+ * }
+ */
+typedef int(*PFN_GLSHADER_LOAD_FILE)(std::stringstream& stm, const std::string& filename, void* arg);
 
 //
 // shader 源码
@@ -74,7 +94,7 @@ public:
         }
     };
 
-protected:
+private:
     // shader 源码行
     struct shader_line
     {
@@ -88,13 +108,17 @@ protected:
 
     typedef std::map<std::string, glsl_source>::iterator iterator;
 
+    GLuint m_id;                                    // 编译后的 shader ID
     std::map<std::string, glsl_source> m_sources;   // 加载的所有源码
     std::vector<shader_line> m_lines;               // shader 最终源码结构
     glsl_source* m_main;                            // 主源码
-    std::vector<char> m_log_buffer;                 // 错误日志缓冲
+
+    PFN_GLSHADER_LOAD_FILE m_pfn_load_file;         // 自定义读取文件函数
+    void* m_arg;                                    // 自定义读取文件函数的额外参数
 
 public:
-    glshader() : m_sources(), m_lines(), m_main()
+    glshader() : m_id(GL_NONE), m_sources(), m_lines(), m_main()
+        , m_pfn_load_file(nullptr), m_arg(nullptr)
     {
 
     }
@@ -104,8 +128,44 @@ public:
         this->dispose();
     }
 
-    // 加载源码
-    int load(const std::string& filename, bool gles = false)
+    // 返回 shader ID
+    GLuint id()const
+    {
+        return m_id;
+    }
+
+    operator GLuint()const
+    {
+        return m_id;
+    }
+
+    // 判断是否为空
+    bool is_null()const
+    {
+        return m_id == GL_NONE;
+    }
+
+    // 设置自定义文件加载函数
+    void set_load_function(PFN_GLSHADER_LOAD_FILE pfn, void* arg)
+    {
+        m_pfn_load_file = pfn;
+        m_arg = arg;
+    }
+
+    // 获取自定义文件加载函数
+    PFN_GLSHADER_LOAD_FILE load_function()const
+    {
+        return m_pfn_load_file;
+    }
+
+    // 获取自定义读取参数
+    void* load_arg()const
+    {
+        return m_arg;
+    }
+
+    // 加载源码 gles
+    int load(GLenum type, const std::string& filename, bool debug = false)
     {
         this->dispose();
 
@@ -119,61 +179,35 @@ public:
         m_main = this->find_source(filename);
 
         // 预处理
-        return this->process_sources(filename);
+        if (this->process_sources(filename) != 0) {
+            return -1;
+        }
+
+        m_id = compile(type, debug);
+
+        return m_id == 0 ? -1 : 0;
     }
 
     // 释放
     void dispose()
     {
+        if (m_id != GL_NONE) {
+            glDeleteShader(m_id);
+            m_id = GL_NONE;
+        }
         m_sources.clear();
         m_lines.clear();
         m_main = NULL;
     }
 
-    // 编译，返回 shader ID
-    GLuint compile(GLenum type, bool debug = false)
+    void attach(GLuint program)
     {
-        // 是否已经处理版本标记
-        bool tag_version = false;
-        std::string code;
+        glAttachShader(program, m_id);
+    }
 
-        for (size_t i = 0; i < m_lines.size(); ++i) {
-            size_t id = m_lines[i].line;
-            const glsl_line& line = m_lines[i].source->lines[id];
-
-            switch (line.mode) {
-            case GLSL_CODE:
-                code.append(line.source);
-                code.push_back('\n');
-                if (debug) printf("%4d: %s\n", i + 1, line.source.c_str());
-                break;
-            case GLSL_VERSION:
-                if (tag_version) {
-                    code.append("//");
-                    if (debug) printf("%4d: //#version %s\n", i + 1, line.source.c_str());
-                }
-                else {
-                    tag_version = true;
-                    if (debug) printf("%4d: #version %s\n", i + 1, line.source.c_str());
-                }
-                code.append("#version ");
-                code.append(line.source);
-                code.push_back('\n');
-                break;
-            case GLSL_INCLUDE:
-                code.append("//");
-                code.append(line.source);
-                code.push_back('\n');
-
-                if (debug) printf("%4d: //#include \"%s\"\n", i + 1, line.source.c_str());
-                break;
-            default:
-                break;
-            }
-        }
-        
-        // 编译
-        return compile_shader(type, code.c_str());
+    void detach(GLuint program)
+    {
+        glDetachShader(program, m_id);
     }
 
 protected:
@@ -195,6 +229,19 @@ protected:
         return NULL;
     }
 
+    // 加载文件到字符串中
+    int load_file(std::stringstream& stm, const std::string& filename)
+    {
+        std::ifstream in;
+        in.open(filename.c_str());
+        if (in.is_open()) {
+            stm << in.rdbuf();
+            in.close();
+            return 0;
+        }
+        return -1;
+    }
+
     // 加载 glsl 到 map 中
     int load_source(const std::string& filename)
     {
@@ -208,9 +255,18 @@ protected:
             return 0;
         }
 
-        // 打开文件
-        std::ifstream in(filename);
-        if (in.fail()) {
+        // 加载文件
+        std::stringstream in;
+        int n = -1;
+
+        if (m_pfn_load_file) {// 自定义加载函数
+            n = m_pfn_load_file(in, filename, m_arg);
+        }
+        else {// 默认磁盘加载函数
+            n = this->load_file(in, filename);
+        }
+
+        if (n != 0) {
             cout << "glsl> file open failed: " << filename << endl;
             return -1;
         }
@@ -262,7 +318,7 @@ protected:
 
                     // 加载 include 文件
                     string tempFile = dir + tag;
-                    if (load_source(tempFile) != 0) {
+                    if (this->load_source(tempFile) != 0) {
                         return -1;
                     }
 
@@ -332,19 +388,23 @@ protected:
     }
 
     // 返回 shader 类型名字
-    const char* shader_type_name(GLenum type)
+    static const char* shader_type_to_string(GLenum type)
     {
         switch (type) {
         case GL_FRAGMENT_SHADER:
-            return "Fragment Shader";
+            return "fragment shader";
         case GL_VERTEX_SHADER:
-            return "Vertex Shader";
+            return "vertex shader";
         case GL_GEOMETRY_SHADER:
-            return "Geometry Shader";
+            return "geometry shader";
+        case GL_TESS_EVALUATION_SHADER:
+            return "tess evaluation shader";
+        case GL_TESS_CONTROL_SHADER:
+            return "tess control shader";
         case GL_COMPUTE_SHADER:
-            return "Compute Shader";
+            return "compute shader";
         default:
-            return "Unknown Shader";
+            return "unknown shader";
         }
     }
 
@@ -374,9 +434,9 @@ protected:
             GLint infoLen = 0;
             glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLen);
             if (infoLen > 1) {
-                m_log_buffer.resize(infoLen);
-                glGetShaderInfoLog(shader, infoLen, NULL, &m_log_buffer[0]);
-                this->report(type, &m_log_buffer[0]);
+                std::vector<char> log(infoLen); // 错误日志缓冲
+                glGetShaderInfoLog(shader, infoLen, NULL, &log[0]);
+                this->report(type, &log[0]);
             }
 
             glDeleteShader(shader);
@@ -386,6 +446,7 @@ protected:
         return shader;
     }
 
+    // 报告错误
     void report(GLenum type, const char* log)
     {
         using namespace std;
@@ -427,7 +488,7 @@ protected:
 
                 // 错误行号是起始 1
                 //cout << "================================" << endl;
-                cout << "glsl> " << tag << ' ' << shader_type_name(type)
+                cout << "glsl> " << tag << ' ' << shader_type_to_string(type)
                     << ": \"" << shaderLine.source->filename << "\"" << endl;
                 cout << "      " << x << ":" << shaderLine.line + 1
                     << ": " << line.substr(stm.tellg()) << endl;
@@ -436,6 +497,54 @@ protected:
                 cout << "glsl> " << log;
             }
         }
+    }
+
+    // 编译，返回 shader ID
+    GLuint compile(GLenum type, bool debug = false)
+    {
+        using namespace std;
+
+        // 是否已经处理版本标记
+        bool tag_version = false;
+        std::string code;
+
+        for (size_t i = 0; i < m_lines.size(); ++i) {
+            size_t id = m_lines[i].line;
+            const glsl_line& line = m_lines[i].source->lines[id];
+
+            switch (line.mode) {
+            case GLSL_CODE:
+                code.append(line.source);
+                code.push_back('\n');
+                if (debug) cout << i + 1 << ": " << line.source << endl;
+                break;
+            case GLSL_VERSION:
+                if (tag_version) {
+                    code.append("//");
+                    if (debug) cout << i + 1 << ": //#version " << line.source << endl;
+                }
+                else {
+                    tag_version = true;
+                    if (debug) cout << i + 1 << ": #version " << line.source << endl;
+                }
+                code.append("#version ");
+                code.append(line.source);
+                code.push_back('\n');
+                break;
+            case GLSL_INCLUDE:
+                code.append("//");
+                code.append(line.source);
+                code.push_back('\n');
+
+                if (debug) cout << i + 1 << ": //#include \""<< line.source <<"\"" << endl;
+                break;
+            default:
+                break;
+            }
+        }
+
+        // 编译
+        return compile_shader(type, code.c_str());
     }
 };
 
